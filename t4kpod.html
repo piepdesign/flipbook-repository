@@ -57,60 +57,73 @@
   (function(){
     "use strict";
 
-    /* 
-      ➜ Parent unterstützt zwei Formate. Wir senden BEIDE:
-         A) Neu: { __cursorMsg:1, type:'move'|'enter'|'leave', cx, cy, hover? }
-         B) Alt: { type:'cursor', x, y, hover? } | 'cursor:enter' | 'cursor:leave'
-      So ist der Custom Cursor im Parent garantiert aktiv und folgt auch IM iFrame.
-    */
+    // Parent erwartet (neues Protokoll):
+    // { __cursorMsg:1, type:'move'|'enter'|'leave', cx, cy, hover? }
 
-    // Ziel-Origin: Parent filtert streng per Origin, daher hier bewusst '*'
     const TARGET_ORIGIN = '*';
 
-    // Welche Elemente im iFrame gelten als "interaktiv" (für aktiven Cursorstil)?
-    const HOVER_SELECTOR = 'a, button, [role="button"], [href], input, select, textarea, canvas, [data-link]';
-    function isInteractive(el){
+    // Sehr robuste Interaktivitäts-Erkennung im iFrame
+    const HOVER_SELECTOR = [
+      'a[href]',
+      'button:not([disabled])',
+      '[role="button"]',
+      '[role="link"]',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+      '[data-link]',
+      '[data-action]',
+      '[data-act]',
+      '[onclick]',
+      '.t4kpod-icon',
+      'canvas'                 /* z.B. Page-Flip Canvas */
+    ].join(',');
+
+    const isInteractive = (el)=>{
       try { return !!(el && el.closest && el.closest(HOVER_SELECTOR)); }
       catch(e){ return false; }
-    }
+    };
 
-    function postBoth(kind, payload){
-      // NEUES Protokoll (empfohlen)
-      if (kind === 'move'){
-        window.parent.postMessage({ __cursorMsg:1, type:'move', cx:payload.x, cy:payload.y, hover:payload.hover }, TARGET_ORIGIN);
-      } else if (kind === 'enter'){
-        window.parent.postMessage({ __cursorMsg:1, type:'enter', hover:payload.hover }, TARGET_ORIGIN);
-      } else if (kind === 'leave'){
-        window.parent.postMessage({ __cursorMsg:1, type:'leave' }, TARGET_ORIGIN);
+    const post = (type, payload={})=>{
+      try {
+        window.parent.postMessage({ __cursorMsg:1, type, ...payload }, TARGET_ORIGIN);
+      } catch(e){}
+    };
+
+    let hoverNow = false;
+
+    // Sofortiges Umschalten bei pointerover / pointerout (ohne Mausbewegung)
+    window.addEventListener('pointerover', (e)=>{
+      const on = isInteractive(e.target);
+      if (on !== hoverNow){
+        hoverNow = on;
+        post('move', { cx: (e.clientX ?? 0), cy: (e.clientY ?? 0), hover: hoverNow });
       }
+    }, { capture:true, passive:true });
 
-      // ALTES Protokoll (Kompatibilität / Fallback)
-      if (kind === 'move'){
-        window.parent.postMessage({ type:'cursor', x:payload.x, y:payload.y, hover:payload.hover }, TARGET_ORIGIN);
-      } else if (kind === 'enter'){
-        window.parent.postMessage({ type:'cursor:enter' }, TARGET_ORIGIN);
-      } else if (kind === 'leave'){
-        window.parent.postMessage({ type:'cursor:leave' }, TARGET_ORIGIN);
+    window.addEventListener('pointerout', (e)=>{
+      // Nur wenn wir ein interaktives Element verlassen UND nicht direkt in ein anderes interaktives wechseln
+      const fromInteractive = isInteractive(e.target);
+      const to = e.relatedTarget;
+      const toInteractive = isInteractive(to);
+      if (fromInteractive && !toInteractive){
+        hoverNow = false;
+        post('move', { cx: (e.clientX ?? 0), cy: (e.clientY ?? 0), hover: false });
       }
-    }
+    }, { capture:true, passive:true });
 
-    let lastHover = null;
-
-    // Mausbewegung im iFrame → Position relativ zum iFrame-Viewport senden
-    window.addEventListener('mousemove', (e) => {
-      const hover = !!isInteractive(e.target);
-      const changed = (hover !== lastHover);
-      lastHover = hover;
-      postBoth('move', { x:e.clientX, y:e.clientY, hover: changed ? hover : undefined });
+    // Kontinuierliche Positions-Updates (falls UI im iFrame bewegt)
+    window.addEventListener('mousemove', (e)=>{
+      post('move', { cx: e.clientX, cy: e.clientY, /* hover optional → nicht jedes Mal nötig */ });
     }, { passive:true });
 
-    // Eintritt/Austritt (Position beim Eintritt NICHT verändern → kein Sprung)
-    window.addEventListener('mouseenter', () => {
-      postBoth('enter', { hover:false });
+    // Eintritt/Austritt (beim Eintritt NICHT repositionieren -> kein Sprung)
+    window.addEventListener('mouseenter', ()=>{
+      post('enter', { hover: hoverNow });
     }, true);
-
-    window.addEventListener('mouseleave', () => {
-      postBoth('leave', {});
+    window.addEventListener('mouseleave', ()=>{
+      post('leave', {});
     }, true);
   })();
   </script>
