@@ -8,19 +8,21 @@
     }
     html, body {
       margin: 0; padding: 0;
+      overflow: visible !important;
       width: 100%; height: 100%;
-      /* Niemals Scrollbars am Dokument */
-      overflow: hidden !important;
     }
-    body { padding: 4.2em 0; }
+    body {
+        padding: 4em 0;
+        padding: 4.2em 0;
+    }
   </style>
 </head>
 <body>
   <!-- Flipbook – Menü zentriert über dem PDF -->
-  <div id="t4kpod-flipbook-root" style="width:100%;max-width:1100px;height:calc(100vh - 8.4em);margin:0 auto;border-radius:16px;background:transparent;display:flex;flex-direction:column;/* Overflow sichtbar, damit nichts abgeschnitten wird */overflow:visible;">
-    <div class="t4kpod-wrap" style="width:100%;height:100%;position:relative;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;overflow:visible;">
-      <!-- MENÜ -->
-      <div class="t4kpod-topbar" style="position:relative;z-index:3;padding:12px;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:10px;flex:0 0 auto;pointer-events:auto;">
+  <div id="t4kpod-flipbook-root" style="width:100%;max-width:1100px;height:80vh;margin:0 auto;border-radius:16px;overflow:visible;background:transparent;">
+    <div class="t4kpod-wrap" style="width:100%;height:100%;position:relative;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;">
+      <!-- MENÜ (Zoom-Optionen entfernt) -->
+      <div class="t4kpod-topbar" style="padding:12px;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:16px;">
         <div class="t4kpod-pill" style="display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.06);color:#e6e8ee;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:8px 12px;font:500 13px/1.2 system-ui,Inter,Arial;backdrop-filter:blur(6px);">
           <button aria-label="Vorherige Seite" class="t4kpod-icon" data-act="prev" style="all:unset;color:#e6e8ee;display:inline-grid;place-items:center;width:32px;height:32px;border-radius:10px;cursor:pointer;transition:transform .15s ease,background .2s ease" title="Zurück">
             <svg fill="none" height="18" width="18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"></polyline></svg>
@@ -37,17 +39,10 @@
       </div>
 
       <!-- VIEWER -->
-      <div class="t4kpod-viewer" style="position:relative;flex:1 1 auto;display:grid;place-items:center;background:transparent;min-height:240px;padding:0;width:100%;max-width:100%;/* Overflow sichtbar, keine Scrollbars im Dokument */overflow:visible;z-index:1;">
-        <!-- Bleed-Wrapper: lässt Animation über die logische Box hinaus sichtbar werden -->
-        <div class="t4kpod-bleed" style="position:relative;overflow:visible;/* etwas Luft rundum, skaliert mit */padding:2vh 2vw;">
-          <!-- Skalierungs-Wrapper: passt Buch in den verfügbaren Raum, bleibt zentriert -->
-          <div class="t4kpod-scale" style="transform-origin:center center;will-change:transform;display:block;overflow:visible;">
-            <!-- Wichtig: Anfangsskalierung bleibt 0.8 auf dem Flip-Container -->
-            <div class="stf__parent" id="t4kpod-flip" style="will-change:transform;min-width:280px;min-height:240px;display:block;transform:scale(0.8);transform-origin:top center;overflow:visible;"></div>
-          </div>
-        </div>
-
-        <div id="t4kpod-loader" style="position:absolute;inset:0;display:none;place-items:center;gap:12px;color:rgb(230,232,238);font:500 14px/1.2 system-ui,Inter,Arial;background:transparent;z-index:2;">
+      <!-- Transformationsursprung oben, initiale Skalierung bleibt, aber ohne Menü-Optionen -->
+      <div class="t4kpod-viewer" style="position:relative;flex:1;display:grid;align-items:start;justify-items:center;background:transparent;min-height:320px;padding-bottom:32px;width:100%;max-width:100%;">
+        <div class="stf__parent" id="t4kpod-flip" style="will-change:transform;min-width:280px;min-height:320px;width:100%;max-width:4000px;display:block;transform:scale(0.8);transform-origin:top center;"></div>
+        <div id="t4kpod-loader" style="position:absolute;inset:0;display:none;place-items:center;gap:12px;color:rgb(230,232,238);font:500 14px/1.2 system-ui,Inter,Arial;background:transparent;">
           <div class="t4kpod-spin" style="width:42px;height:42px;border-radius:50%;border:3px solid rgba(255,255,255,.15);border-top-color:#00d1b2;animation:t4kpod-spin 1s linear infinite"></div>
           <div>PDF wird geladen…</div>
         </div>
@@ -55,35 +50,79 @@
     </div>
   </div>
 
-  <!-- Cursor-Bridge -->
+  <!-- Cursor-Bridge: iFrame sendet Position + Hover an Parent (Cargo) -->
   <script>
   (function(){
     "use strict";
+
+    // Parent erwartet (neues Protokoll):
+    // { __cursorMsg:1, type:'move'|'enter'|'leave', cx, cy, hover? }
+
     const TARGET_ORIGIN = '*';
+
+    // Sehr robuste Interaktivitäts-Erkennung im iFrame
     const HOVER_SELECTOR = [
-      'a[href]','button:not([disabled])','[role="button"]','[role="link"]',
-      'input:not([disabled])','select:not([disabled])','textarea:not([disabled])',
-      '[tabindex]:not([tabindex="-1"])','[data-link]','[data-action]','[data-act]',
-      '[onclick]','.t4kpod-icon','canvas'
+      'a[href]',
+      'button:not([disabled])',
+      '[role="button"]',
+      '[role="link"]',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+      '[data-link]',
+      '[data-action]',
+      '[data-act]',
+      '[onclick]',
+      '.t4kpod-icon',
+      'canvas'                 /* z.B. Page-Flip Canvas */
     ].join(',');
-    const isInteractive = (el)=>{ try { return !!(el && el.closest && el.closest(HOVER_SELECTOR)); } catch(e){ return false; } };
-    const post = (type, payload={})=>{ try { window.parent.postMessage({ __cursorMsg:1, type, ...payload }, TARGET_ORIGIN); } catch(e){} };
+
+    const isInteractive = (el)=>{
+      try { return !!(el && el.closest && el.closest(HOVER_SELECTOR)); }
+      catch(e){ return false; }
+    };
+
+    const post = (type, payload={})=>{
+      try {
+        window.parent.postMessage({ __cursorMsg:1, type, ...payload }, TARGET_ORIGIN);
+      } catch(e){}
+    };
+
     let hoverNow = false;
 
+    // Sofortiges Umschalten bei pointerover / pointerout (ohne Mausbewegung)
     window.addEventListener('pointerover', (e)=>{
       const on = isInteractive(e.target);
-      if (on !== hoverNow){ hoverNow = on; post('move', { cx: (e.clientX ?? 0), cy: (e.clientY ?? 0), hover: hoverNow }); }
+      if (on !== hoverNow){
+        hoverNow = on;
+        post('move', { cx: (e.clientX ?? 0), cy: (e.clientY ?? 0), hover: hoverNow });
+      }
     }, { capture:true, passive:true });
 
     window.addEventListener('pointerout', (e)=>{
+      // Nur wenn wir ein interaktives Element verlassen UND nicht direkt in ein anderes interaktives wechseln
       const fromInteractive = isInteractive(e.target);
-      const toInteractive = isInteractive(e.relatedTarget);
-      if (fromInteractive && !toInteractive){ hoverNow = false; post('move', { cx: (e.clientX ?? 0), cy: (e.clientY ?? 0), hover: false }); }
+      const to = e.relatedTarget;
+      const toInteractive = isInteractive(to);
+      if (fromInteractive && !toInteractive){
+        hoverNow = false;
+        post('move', { cx: (e.clientX ?? 0), cy: (e.clientY ?? 0), hover: false });
+      }
     }, { capture:true, passive:true });
 
-    window.addEventListener('mousemove', (e)=>{ post('move', { cx: e.clientX, cy: e.clientY }); }, { passive:true });
-    window.addEventListener('mouseenter', ()=>{ post('enter', { hover: hoverNow }); }, true);
-    window.addEventListener('mouseleave', ()=>{ post('leave', {}); }, true);
+    // Kontinuierliche Positions-Updates (falls UI im iFrame bewegt)
+    window.addEventListener('mousemove', (e)=>{
+      post('move', { cx: e.clientX, cy: e.clientY, /* hover optional → nicht jedes Mal nötig */ });
+    }, { passive:true });
+
+    // Eintritt/Austritt (beim Eintritt NICHT repositionieren -> kein Sprung)
+    window.addEventListener('mouseenter', ()=>{
+      post('enter', { hover: hoverNow });
+    }, true);
+    window.addEventListener('mouseleave', ()=>{
+      post('leave', {});
+    }, true);
   })();
   </script>
 
@@ -91,7 +130,10 @@
     @keyframes t4kpod-spin { to { transform: rotate(360deg) } }
 
     /* Hover-Interaktion */
-    #t4kpod-flipbook-root .t4kpod-icon:hover { transform: translateY(-1px); background: rgba(255,255,255,.08); }
+    #t4kpod-flipbook-root .t4kpod-icon:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,.08);
+    }
 
     /* Alle Schatten entfernen */
     #t4kpod-flipbook-root .page { box-shadow: none !important; border-radius: 4px; overflow: hidden; background: #fff; }
@@ -119,14 +161,12 @@
     "use strict";
 
     const PDF_URL = "https://cdn.jsdelivr.net/gh/piepdesign/t4kpod@main/t4kpod.pdf"; // eigene PDF hier einsetzen
-    const root      = document.getElementById("t4kpod-flipbook-root");
-    const viewer    = root.querySelector('.t4kpod-viewer');
-    const scaler    = viewer.querySelector('.t4kpod-scale');
-    const bleedWrap = viewer.querySelector('.t4kpod-bleed');
     const container = document.getElementById("t4kpod-flip");
-    const pageEl    = document.getElementById("t4kpod-page");
-    const pagesEl   = document.getElementById("t4kpod-pages");
-    const loader    = document.getElementById("t4kpod-loader");
+    const pageEl = document.getElementById("t4kpod-page");
+    const pagesEl = document.getElementById("t4kpod-pages");
+    const loader = document.getElementById("t4kpod-loader");
+    const root = document.getElementById("t4kpod-flipbook-root");
+    const viewer = root.querySelector('.t4kpod-viewer');
 
     const setLoading = (on)=> loader.style.display = on ? 'grid' : 'none';
 
@@ -153,30 +193,16 @@
       tmp.onload = ()=>{
         const viewerRect = viewer.getBoundingClientRect();
         const aspect = tmp.height / tmp.width;
-
-        /* Basisgröße – PageFlip bleibt "fixed" (Skalierung außen), 0.8 bleibt aktiv */
-        const baseH = Math.round(Math.max(480, Math.min(viewerRect.height - 40, 2200)));
+        const maxH = Math.max(320, Math.min(viewerRect.height - 48, 2200));
+        const baseH = Math.round(maxH);
         const baseW = Math.round(baseH / aspect);
 
-        /* Container auf Basisgröße setzen (ohne Fit) */
-        container.style.width  = baseW + 'px';
-        container.style.height = baseH + 'px';
-
-        /* PageFlip: immer Doppelseite, Cover einzeln */
         const flip = new St.PageFlip(container, {
-          width:  baseW,
-          height: baseH,
-          size: 'fixed',          // keine Eigen-Skalierung – wir skalieren außen
-          minWidth:  baseW,
-          minHeight: baseH,
-          maxWidth:  baseW,
-          maxHeight: baseH,
-          showPageCorners: true,
-          flippingTime: 650,
-          drawShadow: false,
-          autoSize: false,
-          usePortrait: false,     // nie Portraitmodus
-          showCover: true         // Start: nur Cover
+          width: baseW, height: baseH,
+          size: 'stretch', minWidth: 280, minHeight: 320,
+          maxWidth: 2000, maxHeight: 2200,
+          showPageCorners: true, flippingTime: 650,
+          drawShadow: false, autoSize: true, showCover: true, usePortrait: true
         });
 
         const htmlPages = pages.map((src, idx) => {
@@ -193,26 +219,8 @@
         const q = (sel)=> root.querySelector(sel);
         q('[data-act="prev"]').addEventListener('click', ()=> flip.flipPrev());
         q('[data-act="next"]').addEventListener('click', ()=> flip.flipNext());
+
         flip.on('flip', (e)=>{ pageEl.textContent = String(e.data + 1); });
-
-        /* FIT-Logik: skaliert .t4kpod-scale so, dass baseW/baseH + Bleed in den Viewer passen.
-           Overflow bleibt sichtbar, Scrollbars bleiben aus (body/html overflow:hidden). */
-        const fit = ()=>{
-          const r = viewer.getBoundingClientRect();
-          const bleedX = bleedWrap ? (bleedWrap.clientLeft + 0) : 0; // padding ist in r bereits enthalten
-          const scaleX = r.width  / baseW;
-          const scaleY = r.height / baseH;
-          const s = Math.max(0.05, Math.min(scaleX, scaleY)); // Sicherheitsgrenzen
-          scaler.style.transform = `scale(${s})`;
-          // Alles darf nach außen sichtbar sein
-          viewer.style.overflow = 'visible';
-          root.style.overflow   = 'visible';
-        };
-
-        // Initial + bei Resize/Rotate
-        fit();
-        const ro = new ResizeObserver(fit);
-        ro.observe(viewer);
       };
       tmp.src = pages[0];
     }
