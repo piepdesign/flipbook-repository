@@ -139,118 +139,191 @@
     }
   </style>
 
-  <!-- Bibliotheken -->
+   <!-- Bibliotheken -->
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";</script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js";
+  </script>
   <link href="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/css/page-flip.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/page-flip@2.0.7/dist/js/page-flip.browser.min.js"></script>
 
   <script>
-  (function(){
-    "use strict";
+(function(){
+  "use strict";
 
-    const PDF_URL = "https://cdn.jsdelivr.net/gh/piepdesign/flipbook-repository@main/24_0170_hr_kinderbeteiligung_4_compressed.pdf"; // bleibt gleich
-    const container = document.getElementById("pdf-flip");
-    const pageEl = document.getElementById("pdf-page");
-    const pagesEl = document.getElementById("pdf-pages");
-    const loader = document.getElementById("pdf-loader");
-    const root = document.getElementById("pdf-flipbook-root");
-    const viewer = root.querySelector('.pdf-viewer');
+  const PDF_URL = "https://cdn.jsdelivr.net/gh/piepdesign/flipbook-repository@main/24_0170_hr_kinderbeteiligung_4_compressed.pdf";
 
-    const setLoading = (on)=> loader.style.display = on ? 'grid' : 'none';
+  const container = document.getElementById("pdf-flip");
+  const pageEl    = document.getElementById("pdf-page");
+  const pagesEl   = document.getElementById("pdf-pages");
+  const loader    = document.getElementById("pdf-loader");
+  const root      = document.getElementById("pdf-flipbook-root");
+  const viewer    = root.querySelector(".pdf-viewer");
 
-    async function pdfToImages(url, pixelRatio){
-      const doc = await pdfjsLib.getDocument({ url }).promise;
+  const setLoading = (on)=> loader.style.display = on ? "grid" : "none";
+
+  // Weiche Seiten erzwingen (Design bleibt)
+  function forceSoftPages() {
+    const hardElems = container.querySelectorAll('[data-density="hard"]');
+    hardElems.forEach(el => el.setAttribute("data-density", "soft"));
+  }
+
+  // Flipbook initialisieren
+  function initFlip(totalPages, aspectRatio){
+    const viewerRect = viewer.getBoundingClientRect();
+    const maxH = Math.max(320, Math.min(viewerRect.height - 48, 2200));
+    const baseH = Math.round(maxH);
+    const baseW = Math.round(baseH / aspectRatio);
+
+    const flip = new St.PageFlip(container, {
+      width: baseW,
+      height: baseH,
+      size: "stretch",
+      minWidth: 280,
+      minHeight: 320,
+      maxWidth: 2000,
+      maxHeight: 2200,
+      showPageCorners: true,
+      flippingTime: 650,
+      drawShadow: false,
+      autoSize: true,
+      showCover: false,
+      usePortrait: true
+    });
+
+    flip.on("init",   forceSoftPages);
+    flip.on("update", forceSoftPages);
+
+    // Leere Seitencontainer – Bilder kommen nachträglich
+    const htmlPages = [];
+    for (let i = 0; i < totalPages; i++){
+      const el = document.createElement("div");
+      el.className = "pdf-page";
+      el.setAttribute("data-density", "soft");
+      // alt-Titel "Seite ..." entfernt
+      el.innerHTML = `<img data-pdf-page="${i+1}" alt=""/>`;
+      htmlPages.push(el);
+    }
+
+    flip.loadFromHTML(htmlPages);
+    pageEl.textContent = "0";
+
+    const q = sel => root.querySelector(sel);
+    q('[data-act="prev"]').addEventListener("click", ()=> flip.flipPrev());
+    q('[data-act="next"]').addEventListener("click", ()=> flip.flipNext());
+
+    flip.on("flip", (e)=> { pageEl.textContent = String(e.data); });
+
+    return flip;
+  }
+
+  // Einzelne Seite → JPEG-Bild
+  async function renderPageToImg(doc, pageNum, scale, reusePage){
+    const page     = reusePage || await doc.getPage(pageNum);
+    const viewport = page.getViewport({ scale });
+
+    const canvas = document.createElement("canvas");
+    const ctx    = canvas.getContext("2d", { alpha: false });
+
+    canvas.width  = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // JPEG statt PNG → kleinere Datei, schneller
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+
+    const img = container.querySelector(`img[data-pdf-page="${pageNum}"]`);
+    if (img) img.src = dataUrl;
+  }
+
+  (async function run(){
+    try {
+      setLoading(true);
+
+      // etwas konservativer, aber noch scharf
+      const dpr = window.devicePixelRatio || 1;
+      const pixelRatio = dpr > 1 ? 1.8 : 1.2;
+
+      const doc   = await pdfjsLib.getDocument({ url: PDF_URL }).promise;
       const total = doc.numPages;
+
       pagesEl.textContent = String(total - 2);
-      const pages = [];
-      for(let i=1;i<=total;i++){
-        const page = await doc.getPage(i);
-        const viewport = page.getViewport({ scale: pixelRatio });
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        pages.push(canvas.toDataURL('image/png'));
+
+      // erste Seite nur mit scale 1 für Aspect
+      const firstPageBase = await doc.getPage(1);
+      const baseViewport  = firstPageBase.getViewport({ scale: 1 });
+
+      // Aspect vom PDF
+      const aspect = baseViewport.height / baseViewport.width;
+
+      // Flip initialisieren, um Zielgröße zu kennen
+      const flip = initFlip(total, aspect);
+
+      // Zielbreite aus Flip ziehen (erste Seite-Element)
+      const firstPageEl = container.querySelector(".pdf-page");
+      let targetWidth = baseViewport.width;
+
+      if (firstPageEl){
+        const rect = firstPageEl.getBoundingClientRect();
+        // Sicherheitsfallback, falls 0
+        targetWidth = rect.width > 0 ? rect.width : baseViewport.width;
       }
-      return pages;
-    }
 
-    function initFlip(pages){
-      const tmp = new Image();
-      tmp.onload = ()=>{
-        const viewerRect = viewer.getBoundingClientRect();
-        const aspect = tmp.height / tmp.width;
-        const maxH = Math.max(320, Math.min(viewerRect.height - 48, 2200));
-        const baseH = Math.round(maxH);
-        const baseW = Math.round(baseH / aspect);
+      // Skalierung so wählen, dass wir nur leicht über-rendern
+      const baseScale = targetWidth / baseViewport.width;
+      const scale = baseScale * (dpr > 1 ? 1.4 : 1.1); // leichte Überauflösung für Schärfe
 
-        const flip = new St.PageFlip(container, {
-          width: baseW,
-          height: baseH,
-          size: 'stretch',
-          minWidth: 280,
-          minHeight: 320,
-          maxWidth: 2000,
-          maxHeight: 2200,
-          showPageCorners: true,
-          flippingTime: 650,
-          drawShadow: false,
-          autoSize: true,
-          showCover: false,   // sorgt dafür, dass erste/letzte Seite Einzelseiten sind
-          usePortrait: true
-        });
+      // Render-Warteschlange
+      const queue = [];
+      for (let i = 1; i <= total; i++) queue.push(i);
 
-        // *** WICHTIG: alle Seiten (inkl. Cover/Backcover) auf "soft" zwingen ***
-        function forceSoftPages() {
-          const hardElems = container.querySelectorAll('[data-density="hard"]');
-          hardElems.forEach(el => {
-            el.setAttribute('data-density', 'soft');
-          });
+      const MAX_PARALLEL = 4;
+      let active = 0;
+      let firstImageDone = false;
+
+      const pump = ()=>{
+        if (!queue.length && active === 0){
+          setLoading(false);
+          return;
         }
+        while (active < MAX_PARALLEL && queue.length){
+          const num = queue.shift();
+          active++;
 
-        // Events laut Doku vor loadFromHTML registrieren
-        flip.on('init', forceSoftPages);
-        flip.on('update', forceSoftPages);
-
-        const htmlPages = pages.map((src, idx) => {
-          const el = document.createElement('div');
-          el.className = 'pdf-page';
-          // Standardmäßig soft
-          el.setAttribute('data-density', 'soft');
-          el.innerHTML = `<img src="${src}" alt="Seite ${idx+1}"/>`;
-          return el;
-        });
-
-        flip.loadFromHTML(htmlPages);
-        pageEl.textContent = '0';
-
-        const q = (sel)=> root.querySelector(sel);
-        q('[data-act="prev"]').addEventListener('click', ()=> flip.flipPrev());
-        q('[data-act="next"]').addEventListener('click', ()=> flip.flipNext());
-
-        flip.on('flip', (e)=>{ pageEl.textContent = String(e.data); });
+          (async ()=>{
+            try {
+              if (num === 1){
+                await renderPageToImg(doc, num, scale, firstPageBase);
+                if (!firstImageDone){
+                  firstImageDone = true;
+                  setLoading(false); // sobald erste Seite zu sehen ist
+                }
+              } else {
+                await renderPageToImg(doc, num, scale);
+              }
+            } catch (err){
+              console.error("Fehler beim Rendern Seite", num, err);
+            } finally {
+              active--;
+              pump();
+            }
+          })();
+        }
       };
-      tmp.src = pages[0];
-    }
 
-    (async function run(){
-      try{
-        setLoading(true);
-        const pixelRatio = window.devicePixelRatio > 1 ? 2.4 : 1.6;
-        const pages = await pdfToImages(PDF_URL, pixelRatio);
-        setLoading(false);
-        initFlip(pages);
-      }catch(err){
-        console.error(err);
-        setLoading(false);
-        const msg = document.createElement('div');
-        msg.style.cssText = 'color:#fff;padding:24px;background:rgba(0,0,0,.4);border-radius:12px;';
-        msg.textContent = 'Fehler beim Laden der PDF: ' + err.message;
-        viewer.appendChild(msg);
-      }
-    })();
+      pump();
+
+    } catch (err){
+      console.error(err);
+      setLoading(false);
+      const msg = document.createElement("div");
+      msg.style.cssText = "color:#fff;padding:24px;background:rgba(0,0,0,.4);border-radius:12px;";
+      msg.textContent = "Fehler beim Laden der PDF: " + err.message;
+      viewer.appendChild(msg);
+    }
   })();
-  </script>
-</body>
+})();
+</script>
+
+  </body>
